@@ -11,3 +11,10 @@
 *.lai
 *.la
 *.a
+
+projects/vs2013/Debug
+projects/vs2013/Release
+projects/vs2013/ipch
+projects/vs2013/*.opensdf
+projects/vs2013/*.sdf
+projects/vs2013/*.suo
