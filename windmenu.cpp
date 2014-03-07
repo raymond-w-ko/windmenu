@@ -126,6 +126,9 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     }
 
+    case WM_ERASEBKGND: {
+      return 1;
+    }
     case WM_PAINT: {
       PAINTSTRUCT ps;
       HDC hdc = BeginPaint(hwnd, &ps);
@@ -136,8 +139,21 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
       DeleteObject(background_brush);
 
       // draw current command
+      HFONT font = CreateFont(0, 0, 0, 0, 0,
+                              FALSE, FALSE, FALSE,
+                              ANSI_CHARSET,
+                              OUT_RASTER_PRECIS,
+                              CLIP_DEFAULT_PRECIS,
+                              NONANTIALIASED_QUALITY,
+                              DEFAULT_PITCH | FF_DONTCARE,
+                              L"fixed613");
+
+      SelectObject(hdc, font);
+      SetBkColor(hdc, RGB(0, 43, 54));
+      SetTextColor(hdc, RGB(131, 148, 150));
       ExtTextOut(hdc, 0, 0, ETO_CLIPPED, &ps.rcPaint, mCommand.c_str(), mCommand.size(), NULL);
 
+      DeleteObject(font);
       EndPaint(hwnd, &ps);
       return 0;
     }
