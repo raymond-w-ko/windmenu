@@ -54,6 +54,9 @@ windmenu::windmenu(HINSTANCE hInstance)
 
 windmenu::~windmenu() {
   msHwndToInstance.erase(mHwnd);
+  if (mBackgroundScanThread.joinable()) {
+    mBackgroundScanThread.join();
+  }
 }
 
 void windmenu::createWindowsClass() {
@@ -372,6 +375,22 @@ void windmenu::updatePossibleCommands() {
 }
 
 void windmenu::runCommand() {
+  if (mCommand.size() == 0) {
+    return;
+  }
+
+  if (mCommand == L"exit") {
+    PostQuitMessage(0);
+    return;
+  } else if (mCommand == L"rescan") {
+    Rescan();
+    return;
+  }
+
+  if (mCommandCandidates.size() == 0) {
+    return;
+  }
+
   const CandidateInfo& candidate = mCommandCandidates[mSelectedCandidateIndex];
   std::wstring dir = candidate.Directory;
   std::wstring exe = candidate.ExeName;
