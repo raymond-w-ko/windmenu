@@ -42,7 +42,11 @@ windmenu::windmenu(HINSTANCE hInstance)
       mClassName(L"windmenu"),
       mHwnd(NULL),
       mHook(NULL),
+      mUiWidth(0),
+      mSelectedCandidateIndex(0),
       mVisible(false) {
+  this->Rescan();
+
   createWindowsClass();
   createWindow();
   msHwndToInstance[mHwnd] = this;
@@ -74,7 +78,7 @@ void windmenu::createWindowsClass() {
 void windmenu::createWindow() {
   const int x = 0;
   const int y = 0;
-  const int width = GetSystemMetrics(SM_CXSCREEN);
+  mUiWidth = GetSystemMetrics(SM_CXSCREEN);
   //const int height = GetSystemMetrics(SM_CYSCREEN);
   mHwnd = CreateWindowEx(
       WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -82,7 +86,7 @@ void windmenu::createWindow() {
       mClassName.c_str(),
       WS_POPUP,
       x, y,
-      width, 24,
+      mUiWidth, 24,
       NULL,
       NULL,
       mHinstance,
@@ -118,6 +122,10 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
       return 0;
     }
 
+    case WM_CREATE: {
+      return 0;
+    }
+
     case WM_DELAYED_SET_FOCUS: {
       SetForegroundWindow(hwnd);
       SetFocus(hwnd);
@@ -133,7 +141,7 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
       PAINTSTRUCT ps;
       HDC hdc = BeginPaint(hwnd, &ps);
 
-      // draw a black background
+      // draw a background
       HBRUSH background_brush = CreateSolidBrush(RGB(0, 43, 54));
       FillRect(hdc, &ps.rcPaint, background_brush);
       DeleteObject(background_brush);
@@ -147,11 +155,52 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                               NONANTIALIASED_QUALITY,
                               DEFAULT_PITCH | FF_DONTCARE,
                               L"fixed613");
-
       SelectObject(hdc, font);
       SetBkColor(hdc, RGB(0, 43, 54));
       SetTextColor(hdc, RGB(131, 148, 150));
-      ExtTextOut(hdc, 0, 0, ETO_CLIPPED, &ps.rcPaint, mCommand.c_str(), mCommand.size(), NULL);
+
+      if (mCommand.size() > 0) {
+        SIZE textsize;
+        unsigned x = 5;
+
+        // draw user entered command
+        ExtTextOut(hdc, x, 5, ETO_CLIPPED, &ps.rcPaint, mCommand.c_str(), mCommand.size(), NULL);
+        GetTextExtentPoint32(hdc, mCommand.c_str(), mCommand.size(), &textsize);
+        x += textsize.cx;
+
+        // constant offset before drawing candidates so it does not skip around
+        x = 200;
+
+        for (size_t i = 0; i < mCommandCandidates.size(); ++i) {
+          if (x > mUiWidth) {
+            break;
+          }
+
+          const auto& candidate = mCommandCandidates[i];
+
+          bool selected = i == mSelectedCandidateIndex;
+          if (selected) {
+            SetBkColor(hdc, RGB(131, 148, 150));
+            SetTextColor(hdc, RGB(0, 43, 54));
+          } else {
+            SetBkColor(hdc, RGB(0, 43, 54));
+            SetTextColor(hdc, RGB(131, 148, 150));
+          }
+
+          std::wstring text = candidate.ExeName;
+          if (candidate.ShowDirectory) {
+            text = candidate.Directory + L"\\" + text;
+          }
+
+          // draw candidate command
+          ExtTextOut(hdc, x, 5, ETO_CLIPPED, &ps.rcPaint, text.c_str(), text.size(), NULL);
+          GetTextExtentPoint32(hdc, text.c_str(), text.size(), &textsize);
+          x += textsize.cx;
+
+          // candidate command space
+          x += 12;
+        }
+      }
 
       DeleteObject(font);
       EndPaint(hwnd, &ps);
@@ -161,10 +210,31 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_KEYDOWN: {
       switch (wParam) {
         case VK_BACK: {
+          if (mCommand.size() > 0) {
+            mCommand.resize(mCommand.size() - 1, L' ');
+            updatePossibleCommands();
+            InvalidateRect(hwnd, NULL, TRUE);
+          }
           break;
         }
         case VK_RETURN: {
+          runCommand();
           ToggleVisibility();
+          break;
+        }
+        case VK_TAB: {
+          bool shift_down = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+          int dir = 1;
+          if (shift_down) {
+            dir = -1;
+          }
+          size_t new_index = mSelectedCandidateIndex + dir;
+
+          if (new_index >= 0 && new_index < mCommandCandidates.size()) {
+            mSelectedCandidateIndex = new_index;
+            InvalidateRect(hwnd, NULL, TRUE);
+          }
+
           break;
         }
         default: {
@@ -174,6 +244,7 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
           UINT scan_code = (lParam >> 16) & 0xFF;
           if (ToUnicode(wParam, scan_code, keyboard_state, buf, 4, 0) == 1) {
             mCommand += buf[0];
+            updatePossibleCommands();
             InvalidateRect(hwnd, NULL, TRUE);
           }
 
@@ -195,4 +266,127 @@ void windmenu::ToggleVisibility() {
   if (mVisible) {
     PostMessage(mHwnd, WM_DELAYED_SET_FOCUS, 0, 0);
   }
+}
+
+void windmenu::Rescan() {
+  if (mBackgroundScanThread.joinable()) {
+    mBackgroundScanThread.join();
+  }
+  mBackgroundScanThread = std::thread(&windmenu::rescan, this);
+}
+
+void windmenu::rescan() {
+  mExecutablesLock.lock();
+  mExecutables.clear();
+  mExecutablesLock.unlock();
+
+  addExecutablesInEnvironmentVariable(L"PATH", 0);
+  addExecutablesInEnvironmentVariable(L"ProgramW6432", 2);
+  addExecutablesInEnvironmentVariable(L"ProgramFiles(x86)", 2);
+}
+
+void windmenu::addExecutablesInEnvironmentVariable(std::wstring env, int depth) {
+  DWORD ret;
+  TCHAR buffer[32767];
+  ret = GetEnvironmentVariable(env.c_str(), buffer, 32767);
+  if (ret) {
+    std::wstring path(buffer);
+    std::wistringstream ss(path);
+    std::wstring token;
+    while (std::getline(ss, token, (wchar_t)';')) {
+      addExecutablesInDir(token, depth);
+    }
+  }
+}
+
+void windmenu::addExecutablesInDir(std::wstring dir, int depth) {
+  print(dir);
+
+  WIN32_FIND_DATA ffd;
+  HANDLE hFind = FindFirstFile((dir + L"\\*").c_str(), &ffd);
+  if (hFind == INVALID_HANDLE_VALUE) {
+    return;
+  }
+
+  do {
+    std::wstring filename(ffd.cFileName);
+
+    if (filename == L"." || filename == L"..") {
+      continue;
+    }
+
+    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if ((depth - 1) >= 0) {
+        addExecutablesInDir(dir + L"\\" + ffd.cFileName, depth - 1);
+      }
+      continue;
+    }
+
+    std::wstring lowercase_filename(filename);
+    CharLowerBuff(&lowercase_filename[0], lowercase_filename.size());
+    if (!EndsWith(filename, L".exe")) {
+      continue;
+    }
+
+    lowercase_filename.resize(lowercase_filename.size() - 4, L' ');
+    mExecutablesLock.lock();
+    ExecutableInfo& info = mExecutables[lowercase_filename];
+    info.Locations.insert(dir);
+    info.ExeName = filename;
+    mExecutablesLock.unlock();
+
+  } while(FindNextFile(hFind, &ffd) != 0);
+}
+
+void windmenu::updatePossibleCommands() {
+  mCommandCandidates.clear();
+  mSelectedCandidateIndex = 0;
+
+  if (mCommand.size() == 0) {
+    return;
+  }
+
+  mExecutablesLock.lock();
+  auto end_iter = mExecutables.upper_bound(mCommand);
+  for (auto iter = mExecutables.lower_bound(mCommand); iter != mExecutables.end(); ++iter) {
+    if (!BeginsWith(iter->first, mCommand)) {
+      break;
+    }
+
+    const std::wstring& exe_name = iter->second.ExeName;
+    const auto locations = iter->second.Locations;
+
+    for (auto location = locations.cbegin(); location != locations.end(); ++location) {
+      CandidateInfo candidate;
+      if (locations.size() == 1) {
+        candidate.ShowDirectory = false;
+      } else {
+        candidate.ShowDirectory = true;
+      }
+      candidate.Directory = *location;
+      candidate.ExeName = exe_name;
+      mCommandCandidates.push_back(candidate);
+    }
+  }
+  mExecutablesLock.unlock();
+}
+
+void windmenu::runCommand() {
+  const CandidateInfo& candidate = mCommandCandidates[mSelectedCandidateIndex];
+  std::wstring dir = candidate.Directory;
+  std::wstring exe = candidate.ExeName;
+  std::wstring path(dir + L"\\" + exe);
+
+  std::wstring args;
+
+  ShellExecute(
+      NULL,
+      NULL,
+      path.c_str(),
+      args.c_str(),
+      dir.c_str(),
+      SW_SHOWDEFAULT);
+
+  mCommand.clear();
+  updatePossibleCommands();
 }
