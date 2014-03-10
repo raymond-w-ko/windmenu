@@ -36,6 +36,7 @@ class windmenu {
   void createWindow();
 
   // command processing
+  void setForeground();
   void updatePossibleCommands();
   void runCommand();
 

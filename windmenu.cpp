@@ -130,11 +130,8 @@ LRESULT windmenu::windowProc(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_DELAYED_SET_FOCUS: {
-      SetForegroundWindow(hwnd);
-      SetFocus(hwnd);
-      SetActiveWindow(hwnd);
+      setForeground();
       return 0;
-
     }
 
     case WM_ERASEBKGND: {
@@ -268,6 +265,8 @@ void windmenu::ToggleVisibility() {
   ShowWindow(mHwnd, mVisible ? SW_SHOW : SW_HIDE);
   if (mVisible) {
     PostMessage(mHwnd, WM_DELAYED_SET_FOCUS, 0, 0);
+  } else {
+    mCommand.clear();
   }
 }
 
@@ -284,8 +283,17 @@ void windmenu::rescan() {
   mExecutablesLock.unlock();
 
   addExecutablesInEnvironmentVariable(L"PATH", 0);
-  addExecutablesInEnvironmentVariable(L"ProgramW6432", 2);
-  addExecutablesInEnvironmentVariable(L"ProgramFiles(x86)", 2);
+  addExecutablesInEnvironmentVariable(L"ProgramW6432", 3);
+  addExecutablesInEnvironmentVariable(L"ProgramFiles(x86)", 3);
+
+  DWORD ret;
+  TCHAR buffer[32767];
+  ret = GetEnvironmentVariable(L"USERPROFILE", buffer, 32767);
+  if (ret) {
+    std::wstring appdata(buffer);
+    appdata += L"\\AppData";
+    addExecutablesInDir(appdata, -1);
+  }
 }
 
 void windmenu::addExecutablesInEnvironmentVariable(std::wstring env, int depth) {
@@ -319,7 +327,7 @@ void windmenu::addExecutablesInDir(std::wstring dir, int depth) {
     }
 
     if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-      if ((depth - 1) >= 0) {
+      if ((depth - 1) != 0) {
         addExecutablesInDir(dir + L"\\" + ffd.cFileName, depth - 1);
       }
       continue;
@@ -408,4 +416,19 @@ void windmenu::runCommand() {
 
   mCommand.clear();
   updatePossibleCommands();
+}
+
+void windmenu::setForeground() {
+  DWORD foreThread = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+  DWORD appThread = GetCurrentThreadId();
+
+  if (foreThread != appThread) {
+    AttachThreadInput(foreThread, appThread, true);
+    BringWindowToTop(mHwnd);
+    ShowWindow(mHwnd, SW_SHOW);
+    AttachThreadInput(foreThread, appThread, false);
+  } else {
+    BringWindowToTop(mHwnd);
+    ShowWindow(mHwnd, SW_SHOW);
+  }
 }
